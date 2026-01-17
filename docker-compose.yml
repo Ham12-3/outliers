@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: outliers-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-outliers}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-outliers_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-outliers}
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-outliers} -d ${POSTGRES_DB:-outliers}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: outliers-api
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-outliers}:${POSTGRES_PASSWORD:-outliers_dev}@postgres:5432/${POSTGRES_DB:-outliers}
+      POSTGRES_USER: ${POSTGRES_USER:-outliers}
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api:/app
+      - api_cache:/app/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      bash -c "
+        echo '=== Running database migrations ===' &&
+        alembic upgrade head &&
+        echo '=== Migrations complete, starting API ===' &&
+        uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: outliers-web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      API_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      api:
+        condition: service_healthy
+    command: npm run dev
+
+volumes:
+  postgres_data:
+  api_cache:
